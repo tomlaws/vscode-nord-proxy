@@ -1,0 +1,9 @@
+.vscode/**
+.vscode-test/**
+src/**
+.eslintrc.json
+tsconfig.json
+chrome-ext/**
+node_modules/**
+*.vsix
+.gitignore

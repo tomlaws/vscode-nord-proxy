@@ -1,0 +1,86 @@
+{
+  "name": "nord-proxy",
+  "displayName": "Nord Proxy",
+  "description": "Route VS Code HTTP traffic through NordVPN's authenticated HTTPS proxy network.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "nordvpn",
+    "proxy",
+    "privacy",
+    "vpn"
+  ],
+  "license": "MIT",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "nord-proxy.connect",
+        "title": "Open Proxy-Protected Window",
+        "category": "Nord Proxy"
+      },
+      {
+        "command": "nord-proxy.disconnect",
+        "title": "Stop Proxy Companion",
+        "category": "Nord Proxy"
+      },
+      {
+        "command": "nord-proxy.setCredentials",
+        "title": "Set NordVPN Service Credentials",
+        "category": "Nord Proxy"
+      },
+      {
+        "command": "nord-proxy.selectLocation",
+        "title": "Switch Proxy Location",
+        "category": "Nord Proxy"
+      },
+      {
+        "command": "nord-proxy.testConnection",
+        "title": "Test Connection",
+        "category": "Nord Proxy"
+      },
+      {
+        "command": "nord-proxy.showStatus",
+        "title": "Show Status",
+        "category": "Nord Proxy"
+      }
+    ],
+    "configuration": {
+      "title": "Nord Proxy",
+      "properties": {
+        "nordProxy.localPort": {
+          "type": "number",
+          "default": 17890,
+          "minimum": 1024,
+          "maximum": 65535,
+          "description": "Loopback port used by the local authenticated proxy bridge."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "clean": "node -e \"require('node:fs').rmSync('out',{recursive:true,force:true})\"",
+    "compile": "npm run clean && tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "test": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.9",
+    "@types/vscode": "^1.90.0",
+    "@typescript-eslint/eslint-plugin": "^7.15.0",
+    "@typescript-eslint/parser": "^7.15.0",
+    "eslint": "^8.57.0",
+    "typescript": "^5.5.2"
+  }
+}
