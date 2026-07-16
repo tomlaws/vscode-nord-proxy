@@ -127,7 +127,7 @@ export class ProxyController implements vscode.Disposable {
     }
     await fs.mkdir(path.dirname(this.infoPath), { recursive: true });
     const token = randomBytes(32).toString('hex');
-    const listenPort = vscode.workspace.getConfiguration('nordProxy').get<number>('localPort', 17890);
+    const listenPort = vscode.workspace.getConfiguration('nordProxy').get<number>('localPort', 0);
     const child = fork(path.join(__dirname, 'companion.js'), [], {
       detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
     });

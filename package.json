@@ -60,10 +60,10 @@
       "properties": {
         "nordProxy.localPort": {
           "type": "number",
-          "default": 17890,
-          "minimum": 1024,
+          "default": 0,
+          "minimum": 0,
           "maximum": 65535,
-          "description": "Loopback port used by the local authenticated proxy bridge."
+          "description": "Loopback port used by the proxy bridge. Use 0 to select a free port automatically. If a configured port is occupied, the extension falls back to a free port."
         }
       }
     }

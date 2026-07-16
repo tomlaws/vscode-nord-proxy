@@ -4,6 +4,9 @@ Opens an isolated VS Code window whose proxy-aware HTTP/HTTPS traffic is routed
 through NordVPN's authenticated HTTPS proxy service. The extension discovers
 locations and recommended servers through NordVPN's live API.
 
+## Motivation
+I wanted to use Codex in VSCode, but OpenAI's API is blocked in my country. I have a NordVPN subscription but I don't want to route all my traffic through the VPN, so I wrote this extension to route VS Code's traffic through NordVPN's proxy service. Plus, proxy is faster than VPN (though it doesn't encrypt traffic). This extension is not affiliated with or endorsed by NordVPN.
+
 ## Setup and use
 
 1. In Nord Account, open **Manual setup** and copy your **service username** and
@@ -28,6 +31,10 @@ or terminal settings. Instead it:
 - supplies standard proxy environment variables to that process;
 - keeps NordVPN service credentials only in the companion's memory;
 - supports live location switching for new connections.
+
+By default, the companion selects a free loopback port automatically. A fixed
+port can be configured with `nordProxy.localPort`; if it is occupied, the
+companion safely falls back to another free port.
 
 The original VS Code window remains unchanged. Use **Nord Proxy: Stop Proxy
 Companion** and close the protected window to stop using the proxy.

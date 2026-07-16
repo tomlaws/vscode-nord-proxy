@@ -21,7 +21,15 @@ async function initialize(message: InitMessage): Promise<void> {
     token = message.token;
     const upstream = await resolveUpstream(message.location, message.credentials);
     proxy = new LocalProxy(upstream);
-    const proxyPort = await proxy.start(message.listenPort);
+    let proxyPort: number;
+    try {
+      proxyPort = await proxy.start(message.listenPort);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE' || message.listenPort === 0) throw error;
+      proxy.dispose();
+      proxy = new LocalProxy(upstream);
+      proxyPort = await proxy.start(0);
+    }
     control = http.createServer((request, response) => void handleControl(request, response, message.credentials));
     await new Promise<void>((resolve, reject) => {
       control!.once('error', reject);
