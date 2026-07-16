@@ -3,7 +3,7 @@
   "displayName": "Nord Proxy",
   "description": "Route VS Code HTTP traffic through NordVPN's authenticated HTTPS proxy network.",
   "icon": "assets/icon.png",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "tomlaws",
   "repository": {
     "type": "git",
