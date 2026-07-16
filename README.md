@@ -7,6 +7,8 @@ locations and recommended servers through NordVPN's live API.
 ## Motivation
 I wanted to use Codex in VSCode, but OpenAI's API is blocked in my country. I have a NordVPN subscription but I don't want to route all my traffic through the VPN, so I wrote this extension to route VS Code's traffic through NordVPN's proxy service. Plus, proxy is faster than VPN (though it doesn't encrypt traffic). This extension is not affiliated with or endorsed by NordVPN.
 
+It may also be useful if you are not allowed to use VPNs at work or school, but you are allowed to use HTTPS proxies.
+
 ## Setup and use
 
 1. In Nord Account, open **Manual setup** and copy your **service username** and
