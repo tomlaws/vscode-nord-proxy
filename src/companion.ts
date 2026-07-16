@@ -66,8 +66,8 @@ async function resolveUpstream(
   location: ProxyLocation,
   credentials: { username: string; password: string },
 ): Promise<UpstreamConfig> {
-  const server = await recommendProxy(location);
-  return { ...credentials, hostname: server.hostname, port: 89 };
+  const hostname = await recommendProxy(location);
+  return { ...credentials, hostname, port: 89 };
 }
 
 function readJson<T>(request: http.IncomingMessage): Promise<T> {

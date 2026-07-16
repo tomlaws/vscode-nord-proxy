@@ -62,7 +62,7 @@ export class ProxyController implements vscode.Disposable {
       await this.context.globalState.update(LOCATIONS_CACHE_KEY, locations);
     } catch (error) {
       locations = this.context.globalState.get<ProxyLocation[]>(LOCATIONS_CACHE_KEY) ?? [];
-      if (!locations.length) throw new Error(`location discovery failed: ${message(error)}`);
+      if (!locations.length) throw new Error(`location discovery failed: ${message(error)}`, { cause: error });
     }
     const current = this.location();
     const choice = await vscode.window.showQuickPick(locations.map(location => ({
@@ -206,7 +206,6 @@ export class ProxyController implements vscode.Disposable {
   }
 
   dispose(): void { this.status.dispose(); }
-  async shutdown(): Promise<void> { /* Companion intentionally survives this Extension Host. */ }
 }
 
 function controlRequest(info: CompanionInfo, method: string, route: string, body?: unknown): Promise<unknown> {

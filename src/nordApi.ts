@@ -5,10 +5,6 @@ interface NordCountry { id: number; name: string; code: string; cities?: NordCit
 interface NordMetadata { name: string; value: string }
 interface NordTechnology { identifier: string; metadata?: NordMetadata[] }
 interface NordServer {
-  id: number;
-  name: string;
-  hostname: string;
-  load: number;
   technologies?: NordTechnology[];
 }
 
@@ -17,13 +13,6 @@ export interface ProxyLocation {
   id: number;
   label: string;
   description: string;
-}
-
-export interface RecommendedProxy {
-  id: number;
-  name: string;
-  hostname: string;
-  load: number;
 }
 
 export async function fetchLocations(): Promise<ProxyLocation[]> {
@@ -47,7 +36,7 @@ export async function fetchLocations(): Promise<ProxyLocation[]> {
   return locations;
 }
 
-export async function recommendProxy(location: ProxyLocation): Promise<RecommendedProxy> {
+export async function recommendProxy(location: ProxyLocation): Promise<string> {
   const query = new URLSearchParams({
     'filters[servers_technologies][identifier]': 'proxy_ssl',
     'filters[servers_groups][identifier]': 'legacy_standard',
@@ -60,7 +49,7 @@ export async function recommendProxy(location: ProxyLocation): Promise<Recommend
   const technology = server.technologies?.find(item => item.identifier === 'proxy_ssl');
   const proxyHostname = technology?.metadata?.find(item => item.name === 'proxy_hostname')?.value;
   if (!proxyHostname) throw new Error('NordVPN recommendation did not include a proxy hostname');
-  return { id: server.id, name: server.name, hostname: proxyHostname, load: server.load };
+  return proxyHostname;
 }
 
 async function getJson<T>(path: string): Promise<T> {
@@ -75,7 +64,7 @@ async function getJson<T>(path: string): Promise<T> {
     try { return await response.json() as T; }
     catch { throw new Error('NordVPN API returned invalid JSON'); }
   } catch (error) {
-    if (controller.signal.aborted) throw new Error('NordVPN API request timed out');
+    if (controller.signal.aborted) throw new Error('NordVPN API request timed out', { cause: error });
     throw error;
   } finally {
     clearTimeout(timeout);

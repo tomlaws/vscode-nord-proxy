@@ -1,11 +1,8 @@
 import * as vscode from 'vscode';
 import { ProxyController } from './proxyController';
 
-let activeController: ProxyController | undefined;
-
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const controller = new ProxyController(context);
-  activeController = controller;
   context.subscriptions.push(controller);
 
   const commands: Array<[string, () => Promise<void>]> = [
@@ -28,9 +25,4 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   await controller.restore();
-}
-
-export async function deactivate(): Promise<void> {
-  await activeController?.shutdown();
-  activeController = undefined;
 }
