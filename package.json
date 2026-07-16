@@ -1,5 +1,5 @@
 {
-  "name": "nord-proxy",
+  "name": "vscode-nord-proxy",
   "displayName": "Nord Proxy",
   "description": "Route VS Code HTTP traffic through NordVPN's authenticated HTTPS proxy network.",
   "version": "0.0.1",
