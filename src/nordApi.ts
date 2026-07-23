@@ -1,3 +1,5 @@
+import * as https from 'node:https';
+
 const API_HOST = 'api.nordvpn.com';
 
 interface NordCity { id: number; name: string }
@@ -53,20 +55,48 @@ export async function recommendProxy(location: ProxyLocation): Promise<string> {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15_000);
-  try {
-    const response = await fetch(`https://${API_HOST}${path}`, {
-      headers: { accept: 'application/json', 'user-agent': 'nord-proxy-vscode/0.0.1' },
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error(`NordVPN API returned HTTP ${response.status}`);
-    try { return await response.json() as T; }
-    catch { throw new Error('NordVPN API returned invalid JSON'); }
-  } catch (error) {
-    if (controller.signal.aborted) throw new Error('NordVPN API request timed out', { cause: error });
-    throw error;
-  } finally {
-    clearTimeout(timeout);
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      return await directJsonRequest<T>(path);
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 500));
+    }
   }
+  throw new Error(`NordVPN API request failed: ${errorMessage(lastError)}`, { cause: lastError });
+}
+
+function directJsonRequest<T>(path: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const request = https.get({
+      hostname: API_HOST,
+      path,
+      headers: { accept: 'application/json', 'user-agent': 'nord-proxy-vscode/0.0.2' },
+      agent: new https.Agent({ keepAlive: false }),
+    }, response => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', chunk => {
+        body += chunk;
+        if (body.length > 5 * 1024 * 1024) request.destroy(new Error('NordVPN API response is too large'));
+      });
+      response.on('end', () => {
+        if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
+          reject(new Error(`NordVPN API returned HTTP ${response.statusCode ?? 'unknown'}`));
+          return;
+        }
+        try { resolve(JSON.parse(body) as T); }
+        catch { reject(new Error('NordVPN API returned invalid JSON')); }
+      });
+    });
+    request.setTimeout(15_000, () => request.destroy(new Error('NordVPN API request timed out')));
+    request.once('error', reject);
+  });
+}
+
+function errorMessage(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const code = (error as NodeJS.ErrnoException).code;
+  return code ? `${error.message} (${code})` : error.message;
 }

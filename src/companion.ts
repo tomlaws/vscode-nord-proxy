@@ -1,3 +1,4 @@
+import { appendFileSync } from 'node:fs';
 import * as http from 'node:http';
 import { LocalProxy, UpstreamConfig } from './localProxy';
 import { ProxyLocation, recommendProxy } from './nordApi';
@@ -6,6 +7,7 @@ interface InitMessage {
   type: 'init';
   token: string;
   listenPort: number;
+  allowPortFallback: boolean;
   credentials: { username: string; password: string };
   location: ProxyLocation;
 }
@@ -13,6 +15,9 @@ interface InitMessage {
 let proxy: LocalProxy | undefined;
 let control: http.Server | undefined;
 let token = '';
+const logPath = process.env.NORD_PROXY_COMPANION_LOG;
+
+log(`Started (pid=${process.pid}, parent=${process.ppid})`);
 
 process.once('message', (message: InitMessage) => void initialize(message));
 
@@ -25,7 +30,8 @@ async function initialize(message: InitMessage): Promise<void> {
     try {
       proxyPort = await proxy.start(message.listenPort);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE' || message.listenPort === 0) throw error;
+      if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE'
+        || message.listenPort === 0 || !message.allowPortFallback) throw error;
       proxy.dispose();
       proxy = new LocalProxy(upstream);
       proxyPort = await proxy.start(0);
@@ -37,7 +43,7 @@ async function initialize(message: InitMessage): Promise<void> {
     });
     const address = control.address();
     if (!address || typeof address === 'string') throw new Error('Unable to determine companion control port');
-    process.send?.({ type: 'ready', proxyPort, controlPort: address.port, pid: process.pid });
+    process.send?.({ type: 'ready', protocol: 2, proxyPort, controlPort: address.port, pid: process.pid });
     process.disconnect?.();
   } catch (error) {
     process.send?.({ type: 'error', message: error instanceof Error ? error.message : String(error) });
@@ -100,10 +106,27 @@ function json(response: http.ServerResponse, status: number, value: unknown): vo
 }
 
 function shutdown(): void {
+  log('Shutdown requested');
   proxy?.dispose();
   control?.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 1_000).unref();
 }
 
-process.once('SIGTERM', shutdown);
-process.once('SIGINT', shutdown);
+process.once('SIGTERM', () => { log('Received SIGTERM'); shutdown(); });
+process.once('SIGINT', () => { log('Received SIGINT'); shutdown(); });
+process.once('SIGHUP', () => { log('Received SIGHUP'); shutdown(); });
+process.once('uncaughtException', error => {
+  log(`Uncaught exception: ${error.stack ?? error.message}`);
+  process.exit(1);
+});
+process.once('unhandledRejection', reason => {
+  log(`Unhandled rejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}`);
+  process.exit(1);
+});
+process.once('exit', code => log(`Exited with code ${code}`));
+
+function log(message: string): void {
+  if (!logPath) return;
+  try { appendFileSync(logPath, `${new Date().toISOString()} ${message}\r\n`, 'utf8'); }
+  catch { /* diagnostics must never terminate the proxy */ }
+}

@@ -1,9 +1,9 @@
 {
   "name": "vscode-nord-proxy",
   "displayName": "Nord Proxy",
-  "description": "Route VS Code HTTP traffic through NordVPN's authenticated HTTPS proxy network.",
+  "description": "Restart VS Code through NordVPN's authenticated proxy servers.",
   "icon": "assets/icon.png",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "tomlaws",
   "repository": {
     "type": "git",
@@ -23,19 +23,19 @@
   ],
   "license": "MIT",
   "activationEvents": [
-    "onStartupFinished"
+    "*"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "nord-proxy.connect",
-        "title": "Open Proxy-Protected Window",
+        "title": "Restart VS Code with Proxy",
         "category": "Nord Proxy"
       },
       {
         "command": "nord-proxy.disconnect",
-        "title": "Stop Proxy Companion",
+        "title": "Restart VS Code without Proxy",
         "category": "Nord Proxy"
       },
       {
@@ -45,12 +45,12 @@
       },
       {
         "command": "nord-proxy.selectLocation",
-        "title": "Switch Proxy Location",
+        "title": "Change Proxy Location",
         "category": "Nord Proxy"
       },
       {
         "command": "nord-proxy.testConnection",
-        "title": "Test Connection",
+        "title": "Verify Proxy and Show Exit IP",
         "category": "Nord Proxy"
       },
       {

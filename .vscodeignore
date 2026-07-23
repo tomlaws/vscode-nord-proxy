@@ -1,5 +1,6 @@
 .vscode/**
 .vscode-test/**
+.diagnostic-user-data/**
 src/**
 eslint.config.mjs
 tsconfig.json
