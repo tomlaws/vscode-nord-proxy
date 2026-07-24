@@ -36,6 +36,7 @@ export class LocalProxy {
 
   private track(socket: net.Socket): void {
     this.sockets.add(socket);
+    socket.on('error', () => socket.destroy());
     socket.once('close', () => this.sockets.delete(socket));
   }
 
@@ -47,6 +48,8 @@ export class LocalProxy {
         target.hostname, Number(target.port || 443),
       );
       this.track(remote);
+      client.once('close', () => remote.destroy());
+      remote.once('close', () => client.destroy());
       client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
       if (head.length) remote.write(head);
       remote.pipe(client);
@@ -64,6 +67,7 @@ export class LocalProxy {
         target.hostname, Number(target.port || 80),
       );
       this.track(remote);
+      response.once('close', () => remote.destroy());
       const headers = sanitizeHeaders(request.headers, target.host);
       remote.write(serializeRequest(request.method ?? 'GET', `${target.pathname}${target.search}`, headers));
       request.pipe(remote);

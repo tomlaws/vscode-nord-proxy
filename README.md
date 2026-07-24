@@ -1,79 +1,81 @@
 # Nord Proxy for VS Code
 
-Gracefully restarts Visual Studio Code with `HTTP_PROXY` and `HTTPS_PROXY`
-pointing to a local authenticated NordVPN proxy bridge. It does not change user
-or workspace settings.
+Routes VS Code proxy-aware traffic through NordVPN's authenticated proxy
+servers. The extension discovers locations through NordVPN's live API and
+applies its local authenticated bridge through VS Code's user-level
+`http.proxy` setting.
 
 ## Features
 
-- Requests a normal VS Code application quit and restarts the same executable
-  with proxy environment variables after shutdown completes.
-- Reuses your normal VS Code user data and profiles.
-- Adds standard proxy environment variables to the restarted process for child
-  programs that honor them.
+- Applies the proxy immediately without restarting VS Code.
+- Restarts the extension host after enabling or disabling so extensions reload
+  with the updated user proxy configuration.
 - Loads available countries and cities from NordVPN's live API.
-- Changes location without restarting VS Code.
+- Changes proxy location without restarting VS Code.
 - Stores NordVPN service credentials in VS Code Secret Storage.
+- Preserves and restores pre-existing user proxy settings.
+- Cleans owned settings when disabled, deactivated, or uninstalled.
 - Verifies the connection and displays the proxy exit IP.
 
 ## Setup
 
 1. In Nord Account, open **Manual setup** and copy your **service username** and
-   **service password**. These are different from your account email and
-   password.
+   **service password**. These differ from your account email and password.
 2. Run **Nord Proxy: Set NordVPN Service Credentials**.
-3. Run **Nord Proxy: Change Proxy Location** if you want a specific location.
-4. Save work in every VS Code window, then run **Nord Proxy: Restart VS Code
-   with Proxy** and confirm the warning.
+3. Run **Nord Proxy: Change Proxy Location** if desired.
+4. Run **Nord Proxy: Enable Proxy**.
 5. Optionally run **Nord Proxy: Verify Proxy and Show Exit IP**.
-6. Save your work and run **Nord Proxy: Restart VS Code without Proxy** when you
-   no longer need it.
+6. Run **Nord Proxy: Disable Proxy** when finished.
 
 The status-bar shield provides the same controls.
 
-## What is proxied
+## Settings lifecycle
 
-The extension starts a local loopback bridge, starts an invisible Windows Script
-Host worker, and invokes VS Code's normal application quit command. The worker
-preserves the detached local proxy process, waits for the initiating extension
-host to exit, sets the following environment for the new process tree, and
-starts the same VS Code executable:
+When enabled, the extension starts a loopback authenticated proxy bridge and
+sets these user-level VS Code settings:
 
-```bat
-set HTTP_PROXY=http://127.0.0.1:<local-port>
-set HTTPS_PROXY=http://127.0.0.1:<local-port>
-set no_proxy=localhost,127.0.0.1
-start "" "<current Code.exe path>"
+```jsonc
+{
+  "http.proxy": "http://127.0.0.1:<local-port>",
+  "http.proxySupport": "override"
+}
 ```
 
-No `--proxy-server` argument is used. Turning the proxy off repeats the restart
-with these proxy environment variables removed.
+Before doing so, it records whether each setting existed and its exact previous
+value. Disabling restores those values. A setting is restored only if it still
+contains the value written by Nord Proxy, so a later manual user change is not
+overwritten.
 
-VS Code activates the extension during startup. If shutdown terminated the
-detached local bridge, the extension recreates it on the same port recorded in
-`HTTP_PROXY` before reporting the proxy active.
+VS Code calls the extension's asynchronous deactivation hook when the extension
+host shuts down or the extension is disabled. The extension restores the
+settings and stops the bridge there. If proxy mode was left enabled during a
+normal shutdown, it is reapplied on the next startup.
 
-While VS Code is running, a lightweight watchdog checks the local bridge every
-five seconds and recreates it on the same port if the process disappears.
+The package also registers VS Code's official `vscode:uninstall` hook. Its
+standalone cleanup script edits the applicable user/profile `settings.json`
+using a JSON-with-comments parser, preserving comments and unrelated settings.
+This provides fallback cleanup if the extension is uninstalled while its proxy
+setting is still owned.
 
-The extension does not write `http.proxy`, `http.proxySupport`, or terminal
-environment values to user or workspace settings.
+The extension does not write workspace settings, terminal environment
+variables, process environment variables, or proxy command-line arguments. It
+does not restart VS Code.
 
-Each restart attempt uses its own timestamped `restart-*.log` and hidden worker
-file in extension global storage, preventing a waiting worker from locking a
-later attempt's files.
+After an explicit enable or disable, only the extension host is restarted. The
+main VS Code window and editor state remain open. Intentional extension-host
+restarts skip normal shutdown cleanup once, preventing the newly applied proxy
+setting from being immediately restored.
 
-## Limitations
+## Reliability and limitations
 
-This mechanism is currently Windows-only. VS Code may prompt for unsaved work;
-canceling that prompt prevents the restart worker from relaunching. Window
-restoration follows your VS Code configuration.
+A lightweight watchdog restores the local bridge on the same port if that
+process exits. Transient Nord tunnel-establishment failures are retried, and a
+dropped tunnel affects only its request rather than terminating the bridge.
 
-VS Code does not give extensions a universal network-interception API. Programs
-that ignore standard proxy variables, remote extension hosts, and software that
-opens raw sockets directly can bypass it.
-For strict process-wide leak prevention, use the NordVPN desktop application or
-an operating-system VPN/firewall.
+VS Code does not expose a universal network-interception API. Software that
+ignores `http.proxy`, remote extension hosts, and programs opening raw sockets
+can bypass it. For strict process-wide leak prevention, use the NordVPN desktop
+application or operating-system VPN/firewall controls.
 
 This independent project is not affiliated with or endorsed by NordVPN.
 

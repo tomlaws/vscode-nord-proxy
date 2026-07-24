@@ -2,24 +2,22 @@
 
 ## Unreleased
 
-- On Windows, enabling gracefully quits VS Code and relaunches the same
-  executable with `HTTP_PROXY`, `HTTPS_PROXY`, and `no_proxy` in its process
-  environment.
-- Removed the `--proxy-server`, `--use-env-proxy`, `ALL_PROXY`,
-  `NODE_USE_ENV_PROXY`, and lowercase proxy-variable launch mechanisms.
-- Disabling gracefully restarts VS Code with the proxy environment removed.
-- Restores a proxy bridge terminated during VS Code shutdown on the same
-  loopback port inherited by the relaunched process.
+- Replaced process restarts, launch arguments, and proxy environment injection
+  with user-level `http.proxy` and `http.proxySupport` settings.
+- Preserves exact previous user values and restores only settings still owned by
+  Nord Proxy.
+- Cleans settings and stops the bridge during extension deactivation.
+- Restarts the extension host after explicit proxy setting changes, while
+  preserving the newly selected state across that intentional restart.
+- Added the official `vscode:uninstall` lifecycle hook with JSONC-safe fallback
+  cleanup for user/profile settings.
 - Monitors the local bridge while VS Code is running and automatically restores
   it on the same port if its process exits.
 - Records companion lifecycle diagnostics in extension global storage.
-- Preserves the detached local proxy process while VS Code exits so the local
-  proxy port remains available to the relaunched process.
-- Uses background Windows Script Host instead of PowerShell, avoiding a visible
-  console window.
-- Uses unique restart worker and log files so canceled or waiting restarts cannot
-  cause `EBUSY` file-lock errors.
-- Removed obsolete extension-host injection and monkeypatch experiments.
+- Prevents transient upstream socket resets from terminating the companion and
+  retries tunnel establishment up to three times.
+- Removed the obsolete WScript restart worker, restart logs, Chromium proxy
+  arguments, and environment-variable mechanisms.
 
 ## 0.0.2
 

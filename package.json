@@ -1,7 +1,7 @@
 {
   "name": "vscode-nord-proxy",
   "displayName": "Nord Proxy",
-  "description": "Restart VS Code through NordVPN's authenticated proxy servers.",
+  "description": "Route VS Code through NordVPN's authenticated proxy servers.",
   "icon": "assets/icon.png",
   "version": "0.0.3",
   "publisher": "tomlaws",
@@ -30,12 +30,12 @@
     "commands": [
       {
         "command": "nord-proxy.connect",
-        "title": "Restart VS Code with Proxy",
+        "title": "Enable Proxy",
         "category": "Nord Proxy"
       },
       {
         "command": "nord-proxy.disconnect",
-        "title": "Restart VS Code without Proxy",
+        "title": "Disable Proxy",
         "category": "Nord Proxy"
       },
       {
@@ -74,12 +74,16 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
+    "vscode:uninstall": "node ./out/uninstall.js",
     "clean": "node -e \"require('node:fs').rmSync('out',{recursive:true,force:true})\"",
     "compile": "npm run clean && tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src",
     "test": "npm run compile",
     "package:vsix": "npx --yes @vscode/vsce package"
+  },
+  "dependencies": {
+    "jsonc-parser": "^3.3.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -12,24 +12,36 @@ const USERNAME_KEY = 'nord-proxy.username';
 const PASSWORD_KEY = 'nord-proxy.password';
 const LOCATION_KEY = 'nord-proxy.location';
 const LOCATIONS_CACHE_KEY = 'nord-proxy.locationsCache';
-const PREVIOUS_SETTINGS_KEY = 'nord-proxy.previousSettings';
-const COMPANION_PROTOCOL = 2;
+const ENABLED_KEY = 'nord-proxy.enabled';
+const COMPANION_PROTOCOL = 3;
 const DEFAULT_LOCATION: ProxyLocation = { type: 'country', id: 228, label: 'United States', description: 'US' };
 
 interface CompanionInfo { protocol: number; token: string; proxyPort: number; controlPort: number; pid: number }
-interface PreviousSettings { httpProxy?: unknown; proxySupport?: unknown; terminalEnvironments: Record<string, unknown> }
+interface SettingBackup { present: boolean; value?: unknown }
+interface CleanupState {
+  version: 1;
+  settingsPath: string;
+  appliedProxy: string;
+  appliedProxySupport: string;
+  originalProxy: SettingBackup;
+  originalProxySupport: SettingBackup;
+  companion: CompanionInfo;
+}
 
 export class ProxyController implements vscode.Disposable {
   private readonly status: vscode.StatusBarItem;
-  private companion?: CompanionInfo;
   private readonly infoPath: string;
+  private readonly cleanupStatePath: string;
+  private companion?: CompanionInfo;
+  private cleanupState?: CleanupState;
   private watchdog?: NodeJS.Timeout;
   private recovery?: Promise<void>;
-  private recoveryErrorShown = false;
+  private shuttingDown = false;
+  private restartingExtensionHost = false;
 
   constructor(private readonly context: vscode.ExtensionContext) {
-    this.infoPath = process.env.NORD_PROXY_CONTROL_FILE
-      ?? path.join(context.globalStorageUri.fsPath, 'companion.json');
+    this.infoPath = path.join(context.globalStorageUri.fsPath, 'companion.json');
+    this.cleanupStatePath = path.join(context.extensionPath, 'uninstall-state.json');
     this.status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
     this.status.command = 'nord-proxy.showStatus';
     this.status.name = 'Nord Proxy';
@@ -38,22 +50,16 @@ export class ProxyController implements vscode.Disposable {
   }
 
   async restore(): Promise<void> {
-    await this.removeLegacyProxySettings();
-    const saved = await this.readSavedCompanion();
-    this.companion = saved ? await this.validateCompanion(saved) : undefined;
-    if (!this.companion && saved?.protocol === COMPANION_PROTOCOL
-      && proxyPortFromEnvironment() === saved.proxyPort) {
-      try {
-        this.companion = await this.restoreCompanion(saved.proxyPort);
-      } catch (error) {
-        void vscode.window.showErrorMessage(`Nord Proxy could not be restored: ${message(error)}`);
-      }
+    if (!this.context.globalState.get<boolean>(ENABLED_KEY, false)) {
+      if (await this.readCleanupState()) await this.cleanUpRuntime();
+      else this.render(false);
+      return;
     }
-    if (saved?.protocol === COMPANION_PROTOCOL
-      && proxyPortFromEnvironment() === saved.proxyPort) this.startWatchdog(saved.proxyPort);
-    this.render(Boolean(this.companion));
-    if (this.companion) {
-      vscode.window.showInformationMessage("Proxy activated successfully.");
+    try {
+      await this.enable(false);
+    } catch (error) {
+      this.render(false);
+      void vscode.window.showErrorMessage(`Nord Proxy could not be restored: ${message(error)}`);
     }
   }
 
@@ -98,43 +104,20 @@ export class ProxyController implements vscode.Disposable {
   }
 
   async connect(): Promise<void> {
-    this.requireWindows();
-    const confirmed = await vscode.window.showWarningMessage(
-      'Nord Proxy will ask VS Code to quit and then restart it with the proxy. Save all work first.',
-      { modal: true },
-      'Quit and Restart VS Code',
-    );
-    if (confirmed !== 'Quit and Restart VS Code') return;
-    this.companion = await this.readActiveCompanion();
-    if (!this.companion) this.companion = await this.startCompanion();
-    await this.scheduleFullRestart(`http://127.0.0.1:${this.companion.proxyPort}`);
-    this.render(true);
-    scheduleGracefulQuit();
+    await this.enable(true);
+    this.restartExtensionHost();
   }
 
   async disconnect(): Promise<void> {
-    this.requireWindows();
-    this.stopWatchdog();
-    this.companion ??= await this.readActiveCompanion();
-    const confirmed = await vscode.window.showWarningMessage(
-      'Nord Proxy will ask VS Code to quit and then restart it without the proxy. Save all work first.',
-      { modal: true },
-      'Quit and Restart Without Proxy',
-    );
-    if (confirmed !== 'Quit and Restart Without Proxy') return;
-    await this.scheduleFullRestart();
-    if (this.companion) {
-      try { await this.control('POST', '/stop'); } catch { /* already stopped */ }
-    }
-    this.companion = undefined;
-    await fs.rm(this.infoPath, { force: true });
-    this.render(false);
-    scheduleGracefulQuit();
+    await this.context.globalState.update(ENABLED_KEY, false);
+    await this.cleanUpRuntime();
+    void vscode.window.showInformationMessage('Nord Proxy disabled and previous user proxy settings restored.');
+    this.restartExtensionHost();
   }
 
   async testConnection(): Promise<void> {
     this.companion ??= await this.readActiveCompanion();
-    if (!this.companion) throw new Error('The proxy is disabled. Run Nord Proxy: Restart VS Code with Proxy first.');
+    if (!this.companion) throw new Error('The proxy is disabled. Run Nord Proxy: Enable Proxy first.');
     const ip = await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: 'Testing Nord Proxy…' },
       () => requestViaProxy(this.companion!.proxyPort, 'api.ipify.org', '/'),
@@ -143,10 +126,9 @@ export class ProxyController implements vscode.Disposable {
   }
 
   async showStatus(): Promise<void> {
-    this.companion = await this.readActiveCompanion();
-    const active = Boolean(this.companion);
+    const active = Boolean(this.companion && await this.validateCompanion(this.companion));
     const selection = await vscode.window.showQuickPick([
-      { label: active ? '$(debug-restart) Restart VS Code without proxy' : '$(debug-restart) Restart VS Code with proxy', command: active ? 'nord-proxy.disconnect' : 'nord-proxy.connect' },
+      { label: active ? '$(debug-disconnect) Disable proxy' : '$(shield) Enable proxy', command: active ? 'nord-proxy.disconnect' : 'nord-proxy.connect' },
       { label: '$(globe) Change proxy location', command: 'nord-proxy.selectLocation' },
       { label: '$(key) Set service credentials', command: 'nord-proxy.setCredentials' },
       { label: '$(pulse) Verify proxy and show exit IP', command: 'nord-proxy.testConnection' },
@@ -154,22 +136,88 @@ export class ProxyController implements vscode.Disposable {
     if (selection) await vscode.commands.executeCommand(selection.command);
   }
 
-  private async startCompanion(listenPortOverride?: number, allowPortFallback = true): Promise<CompanionInfo> {
+  async deactivate(): Promise<void> {
+    if (this.restartingExtensionHost) return;
+    this.shuttingDown = true;
+    await this.cleanUpRuntime();
+  }
+
+  private async enable(showMessage: boolean): Promise<void> {
+    this.shuttingDown = false;
+    this.companion = await this.readActiveCompanion();
+    const existing = this.cleanupState ?? await this.readCleanupState();
+    const previousPort = existing ? localProxyPort(existing.appliedProxy) : undefined;
+    if (!this.companion) this.companion = await this.startCompanionWithRetry(previousPort);
+    const proxyUrl = `http://127.0.0.1:${this.companion.proxyPort}`;
+    await this.applyProxySettings(proxyUrl, this.companion);
+    await this.context.globalState.update(ENABLED_KEY, true);
+    this.startWatchdog(this.companion.proxyPort);
+    this.render(true);
+    if (showMessage) void vscode.window.showInformationMessage('Nord Proxy enabled in VS Code user settings.');
+  }
+
+  private async applyProxySettings(proxyUrl: string, companion: CompanionInfo): Promise<void> {
+    const configuration = vscode.workspace.getConfiguration('http');
+    const proxy = configuration.inspect<unknown>('proxy');
+    const proxySupport = configuration.inspect<unknown>('proxySupport');
+    const existing = this.cleanupState ?? await this.readCleanupState();
+    const stillOwned = existing
+      && proxy?.globalValue === existing.appliedProxy
+      && proxySupport?.globalValue === existing.appliedProxySupport;
+    const state: CleanupState = {
+      version: 1,
+      settingsPath: settingsPathFor(this.context),
+      appliedProxy: proxyUrl,
+      appliedProxySupport: 'override',
+      originalProxy: stillOwned ? existing.originalProxy : backup(proxy?.globalValue),
+      originalProxySupport: stillOwned ? existing.originalProxySupport : backup(proxySupport?.globalValue),
+      companion,
+    };
+    this.cleanupState = state;
+    await this.writeCleanupState(state);
+    await configuration.update('proxy', proxyUrl, vscode.ConfigurationTarget.Global);
+    await configuration.update('proxySupport', 'override', vscode.ConfigurationTarget.Global);
+  }
+
+  private async restoreProxySettings(): Promise<void> {
+    const state = this.cleanupState ?? await this.readCleanupState();
+    if (!state) return;
+    const configuration = vscode.workspace.getConfiguration('http');
+    if (configuration.inspect<unknown>('proxy')?.globalValue === state.appliedProxy) {
+      await configuration.update('proxy', restored(state.originalProxy), vscode.ConfigurationTarget.Global);
+    }
+    if (configuration.inspect<unknown>('proxySupport')?.globalValue === state.appliedProxySupport) {
+      await configuration.update('proxySupport', restored(state.originalProxySupport), vscode.ConfigurationTarget.Global);
+    }
+    await this.removeCleanupState();
+  }
+
+  private async cleanUpRuntime(): Promise<void> {
+    this.stopWatchdog();
+    await this.restoreProxySettings();
+    this.companion ??= await this.readActiveCompanion();
+    if (this.companion) {
+      try { await controlRequest(this.companion, 'POST', '/stop'); } catch { /* already stopped */ }
+    }
+    this.companion = undefined;
+    await fs.rm(this.infoPath, { force: true });
+    this.render(false);
+  }
+
+  private async startCompanion(listenPort?: number): Promise<CompanionInfo> {
     const credentials = await this.credentials();
     if (!credentials) {
       await this.setCredentials();
-      const retry = await this.credentials();
-      if (!retry) throw new Error('NordVPN service credentials are required');
-      return this.startCompanion(listenPortOverride, allowPortFallback);
+      if (!await this.credentials()) throw new Error('NordVPN service credentials are required');
+      return this.startCompanion(listenPort);
     }
     await fs.mkdir(path.dirname(this.infoPath), { recursive: true });
     const token = randomBytes(32).toString('hex');
-    const listenPort = listenPortOverride
+    const configuredPort = listenPort
       ?? vscode.workspace.getConfiguration('nordProxy').get<number>('localPort', 0);
-    const companionLogPath = path.join(path.dirname(this.infoPath), 'companion.log');
     const child = childProcess.fork(path.join(__dirname, 'companion.js'), [], {
       detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
-      env: companionEnvironment(companionLogPath),
+      env: companionEnvironment(path.join(path.dirname(this.infoPath), 'companion.log')),
     });
     const info = await new Promise<CompanionInfo>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error('Local proxy service startup timed out')), 30_000);
@@ -178,10 +226,12 @@ export class ProxyController implements vscode.Disposable {
         clearTimeout(timeout);
         const value = response as { type?: string; message?: string; proxyPort?: number; controlPort?: number; pid?: number };
         if (value.type === 'error') return reject(new Error(value.message ?? 'Local proxy service failed'));
-        if (value.type !== 'ready' || !value.proxyPort || !value.controlPort || !value.pid) return reject(new Error('Invalid local proxy service response'));
+        if (value.type !== 'ready' || !value.proxyPort || !value.controlPort || !value.pid) {
+          return reject(new Error('Invalid local proxy service response'));
+        }
         resolve({ protocol: COMPANION_PROTOCOL, token, proxyPort: value.proxyPort, controlPort: value.controlPort, pid: value.pid });
       });
-      child.send({ type: 'init', token, listenPort, allowPortFallback, credentials, location: this.location() });
+      child.send({ type: 'init', token, listenPort: configuredPort, allowPortFallback: listenPort === undefined, credentials, location: this.location() });
     });
     child.unref();
     child.channel?.unref();
@@ -189,14 +239,14 @@ export class ProxyController implements vscode.Disposable {
     return info;
   }
 
-  private async restoreCompanion(proxyPort: number): Promise<CompanionInfo> {
+  private async startCompanionWithRetry(listenPort?: number): Promise<CompanionInfo> {
     let lastError: unknown;
     for (let attempt = 1; attempt <= 5; attempt++) {
       try {
-        return await this.startCompanion(proxyPort, false);
+        return await this.startCompanion(listenPort);
       } catch (error) {
         lastError = error;
-        if (!/EADDRINUSE/i.test(message(error)) || attempt === 5) break;
+        if (!listenPort || !/EADDRINUSE/i.test(message(error)) || attempt === 5) break;
         await new Promise(resolve => setTimeout(resolve, 500));
       }
     }
@@ -206,7 +256,7 @@ export class ProxyController implements vscode.Disposable {
   private startWatchdog(proxyPort: number): void {
     this.stopWatchdog();
     this.watchdog = setInterval(() => {
-      if (!this.recovery) {
+      if (!this.recovery && !this.shuttingDown) {
         this.recovery = this.ensureCompanion(proxyPort).finally(() => { this.recovery = undefined; });
       }
     }, 5_000);
@@ -219,122 +269,67 @@ export class ProxyController implements vscode.Disposable {
   }
 
   private async ensureCompanion(proxyPort: number): Promise<void> {
-    if (this.companion && await this.validateCompanion(this.companion)) {
-      this.recoveryErrorShown = false;
-      return;
-    }
-    this.companion = undefined;
+    if (this.companion && await this.validateCompanion(this.companion)) return;
     try {
-      this.companion = await this.restoreCompanion(proxyPort);
-      this.recoveryErrorShown = false;
-      this.render(true);
-    } catch (error) {
-      this.render(false);
-      if (!this.recoveryErrorShown) {
-        this.recoveryErrorShown = true;
-        void vscode.window.showErrorMessage(`Nord Proxy stopped and could not be restored: ${message(error)}`);
+      this.companion = await this.startCompanion(proxyPort);
+      const proxyUrl = `http://127.0.0.1:${proxyPort}`;
+      const state = this.cleanupState ?? await this.readCleanupState();
+      if (state) {
+        state.companion = this.companion;
+        state.appliedProxy = proxyUrl;
+        this.cleanupState = state;
+        await this.writeCleanupState(state);
       }
+      this.render(true);
+    } catch {
+      this.companion = undefined;
+      this.render(false);
     }
   }
 
-  private requireWindows(): void {
-    if (process.platform !== 'win32') throw new Error('Full process-tree restart is currently supported on Windows only');
-  }
-
-  private async scheduleFullRestart(proxyUrl?: string): Promise<void> {
-    await fs.mkdir(path.dirname(this.infoPath), { recursive: true });
-    const restartId = `${process.pid}-${Date.now()}`;
-    const logPath = path.join(path.dirname(this.infoPath), `restart-${restartId}.log`);
-    await fs.writeFile(logPath, `Restart requested at ${new Date().toISOString()}\r\n`, 'utf8');
-    const workerPath = path.join(path.dirname(this.infoPath), `restart-${restartId}.vbs`);
-    const workerScript = [
-      'Option Explicit',
-      'Dim shell, env, fso, logFile, services, processes, startedAt, command, launchResult',
-      'Set shell = CreateObject("WScript.Shell")',
-      'Set fso = CreateObject("Scripting.FileSystemObject")',
-      `Set logFile = fso.OpenTextFile(${vbsLiteral(logPath)}, 8, True)`,
-      'logFile.WriteLine "Worker started at " & Now',
-      'Set services = GetObject("winmgmts:{impersonationLevel=impersonate}!\\\\.\\root\\cimv2")',
-      'startedAt = Now',
-      'Do',
-      `  Set processes = services.ExecQuery("SELECT ProcessId FROM Win32_Process WHERE ProcessId=${process.pid}")`,
-      '  If processes.Count = 0 Then Exit Do',
-      '  If DateDiff("s", startedAt, Now) >= 300 Then',
-      '    logFile.WriteLine "Timed out waiting for VS Code to exit; restart canceled"',
-      '    logFile.Close',
-      '    WScript.Quit 1',
-      '  End If',
-      '  WScript.Sleep 250',
-      'Loop',
-      'WScript.Sleep 2000',
-      'Set env = shell.Environment("Process")',
-      'env.Remove "ELECTRON_RUN_AS_NODE"',
-      'env.Remove "ALL_PROXY" : env.Remove "all_proxy" : env.Remove "http_proxy" : env.Remove "https_proxy" : env.Remove "NODE_USE_ENV_PROXY"',
-      proxyUrl
-        ? `env("HTTP_PROXY") = ${vbsLiteral(proxyUrl)} : env("HTTPS_PROXY") = ${vbsLiteral(proxyUrl)} : env("no_proxy") = "localhost,127.0.0.1"`
-        : 'env.Remove "HTTP_PROXY" : env.Remove "HTTPS_PROXY" : env.Remove "no_proxy" : env.Remove "NO_PROXY"',
-      `command = ${vbsLiteral(`"${process.execPath}"`)}`,
-      'On Error Resume Next',
-      'launchResult = shell.Run(command, 0, False)',
-      'If Err.Number <> 0 Then',
-      '  logFile.WriteLine "VS Code launch failed: " & Err.Number & " " & Err.Description',
-      '  logFile.Close',
-      '  WScript.Quit 1',
-      'End If',
-      'logFile.WriteLine "VS Code launch requested at " & Now & "; result=" & launchResult & "; command=" & command',
-      'logFile.Close',
-    ].join('\r\n');
-    await fs.writeFile(workerPath, workerScript, 'utf8');
-    const wscript = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'wscript.exe');
-    const child = childProcess.spawn(wscript, ['//B', '//Nologo', workerPath], {
-      detached: true, stdio: 'ignore', windowsHide: true,
-    });
-    await new Promise<void>((resolve, reject) => {
-      child.once('spawn', resolve);
-      child.once('error', reject);
-    });
-    child.unref();
-  }
-
-  /** One-time cleanup for settings written by version 0.0.2. */
-  private async removeLegacyProxySettings(): Promise<void> {
-    const previous = this.context.globalState.get<PreviousSettings>(PREVIOUS_SETTINGS_KEY);
-    if (!previous) return;
-    const httpConfig = vscode.workspace.getConfiguration('http');
-    await httpConfig.update('proxy', previous.httpProxy, vscode.ConfigurationTarget.Global);
-    await httpConfig.update('proxySupport', previous.proxySupport, vscode.ConfigurationTarget.Global);
-    const terminalConfig = vscode.workspace.getConfiguration('terminal.integrated');
-    for (const platform of ['windows', 'linux', 'osx']) {
-      await terminalConfig.update(
-        `env.${platform}`,
-        previous.terminalEnvironments?.[platform],
-        vscode.ConfigurationTarget.Global,
-      );
-    }
-    await this.context.globalState.update(PREVIOUS_SETTINGS_KEY, undefined);
+  private restartExtensionHost(): void {
+    this.restartingExtensionHost = true;
+    setTimeout(() => {
+      void vscode.commands.executeCommand('workbench.action.restartExtensionHost').then(undefined, error => {
+        if (!/cancel(?:ed|led)/i.test(message(error))) {
+          void vscode.window.showErrorMessage(`Nord Proxy could not restart the extension host: ${message(error)}`);
+        }
+      });
+    }, 100);
   }
 
   private async readActiveCompanion(): Promise<CompanionInfo | undefined> {
-    const info = await this.readSavedCompanion();
-    return info ? this.validateCompanion(info) : undefined;
-  }
-
-  private async readSavedCompanion(): Promise<CompanionInfo | undefined> {
     try {
-      return JSON.parse(await fs.readFile(this.infoPath, 'utf8')) as CompanionInfo;
+      const info = JSON.parse(await fs.readFile(this.infoPath, 'utf8')) as CompanionInfo;
+      if (info.protocol !== COMPANION_PROTOCOL) {
+        try { await controlRequest(info, 'POST', '/stop'); } catch { /* obsolete companion is already gone */ }
+        await fs.rm(this.infoPath, { force: true });
+        return undefined;
+      }
+      return await this.validateCompanion(info) ? info : undefined;
     } catch { return undefined; }
   }
 
-  private async validateCompanion(info: CompanionInfo): Promise<CompanionInfo | undefined> {
-    if (info.protocol !== COMPANION_PROTOCOL) {
-      try { await controlRequest(info, 'POST', '/stop'); } catch { /* obsolete process is already gone */ }
-      await fs.rm(this.infoPath, { force: true });
-      return undefined;
-    }
+  private async validateCompanion(info: CompanionInfo): Promise<boolean> {
+    if (info.protocol !== COMPANION_PROTOCOL) return false;
     try {
       await controlRequest(info, 'GET', '/status');
-      return info;
-    } catch { return undefined; }
+      return true;
+    } catch { return false; }
+  }
+
+  private async writeCleanupState(state: CleanupState): Promise<void> {
+    await fs.writeFile(this.cleanupStatePath, JSON.stringify(state), { encoding: 'utf8', mode: 0o600 });
+  }
+
+  private async readCleanupState(): Promise<CleanupState | undefined> {
+    try { return JSON.parse(await fs.readFile(this.cleanupStatePath, 'utf8')) as CleanupState; }
+    catch { return undefined; }
+  }
+
+  private async removeCleanupState(): Promise<void> {
+    this.cleanupState = undefined;
+    await fs.rm(this.cleanupStatePath, { force: true });
   }
 
   private control(method: string, route: string, body?: unknown): Promise<unknown> {
@@ -365,6 +360,27 @@ export class ProxyController implements vscode.Disposable {
   }
 }
 
+function backup(value: unknown): SettingBackup {
+  return value === undefined ? { present: false } : { present: true, value };
+}
+
+function restored(value: SettingBackup): unknown {
+  return value.present ? value.value : undefined;
+}
+
+function settingsPathFor(context: vscode.ExtensionContext): string {
+  return path.join(path.dirname(path.dirname(context.globalStorageUri.fsPath)), 'settings.json');
+}
+
+function localProxyPort(value: string): number | undefined {
+  try {
+    const url = new URL(value);
+    const port = Number(url.port);
+    return url.protocol === 'http:' && url.hostname === '127.0.0.1'
+      && Number.isInteger(port) && port > 0 && port <= 65535 ? port : undefined;
+  } catch { return undefined; }
+}
+
 function controlRequest(info: CompanionInfo, method: string, route: string, body?: unknown): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const payload = body === undefined ? undefined : JSON.stringify(body);
@@ -376,7 +392,9 @@ function controlRequest(info: CompanionInfo, method: string, route: string, body
       response.setEncoding('utf8');
       response.on('data', chunk => { data += chunk; });
       response.on('end', () => {
-        const parsed = data ? JSON.parse(data) as { error?: string } : {};
+        let parsed: { error?: string };
+        try { parsed = data ? JSON.parse(data) as { error?: string } : {}; }
+        catch { return reject(new Error(`Control request returned invalid JSON (HTTP ${response.statusCode ?? 'unknown'})`)); }
         if ((response.statusCode ?? 500) >= 400) reject(new Error(parsed.error ?? `Control request failed (${response.statusCode})`));
         else resolve(parsed);
       });
@@ -431,41 +449,17 @@ function readHeaders(socket: net.Socket): Promise<string> {
   });
 }
 
-function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }
-
-function vbsLiteral(value: string): string {
-  return `"${value.replace(/"/g, '""')}"`;
-}
-
 function companionEnvironment(logPath: string): NodeJS.ProcessEnv {
   const environment = { ...process.env };
-  const inheritedProxyVariables = new Set([
-    'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy', 'node_use_env_proxy',
-  ]);
   for (const name of Object.keys(environment)) {
-    if (inheritedProxyVariables.has(name.toLowerCase())) delete environment[name];
+    if (['http_proxy', 'https_proxy', 'all_proxy', 'no_proxy', 'node_use_env_proxy'].includes(name.toLowerCase())) {
+      delete environment[name];
+    }
   }
   environment.NORD_PROXY_COMPANION_LOG = logPath;
   return environment;
 }
 
-function proxyPortFromEnvironment(): number | undefined {
-  const value = process.env.HTTP_PROXY ?? process.env.HTTPS_PROXY;
-  if (!value) return undefined;
-  try {
-    const url = new URL(value);
-    if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1') return undefined;
-    const port = Number(url.port);
-    return Number.isInteger(port) && port > 0 && port <= 65535 ? port : undefined;
-  } catch { return undefined; }
-}
-
-function scheduleGracefulQuit(): void {
-  setTimeout(() => {
-    void vscode.commands.executeCommand('workbench.action.quit').then(undefined, error => {
-      if (!/cancel(?:ed|led)/i.test(message(error))) {
-        void vscode.window.showErrorMessage(`Nord Proxy: Could not quit VS Code: ${message(error)}`);
-      }
-    });
-  }, 100);
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

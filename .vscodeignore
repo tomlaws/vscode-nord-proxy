@@ -1,10 +1,12 @@
 .vscode/**
 .vscode-test/**
 .diagnostic-user-data/**
+uninstall-state.json
 src/**
 eslint.config.mjs
 tsconfig.json
 chrome-ext/**
 node_modules/**
+!node_modules/jsonc-parser/**
 *.vsix
 .gitignore

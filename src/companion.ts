@@ -43,7 +43,7 @@ async function initialize(message: InitMessage): Promise<void> {
     });
     const address = control.address();
     if (!address || typeof address === 'string') throw new Error('Unable to determine companion control port');
-    process.send?.({ type: 'ready', protocol: 2, proxyPort, controlPort: address.port, pid: process.pid });
+    process.send?.({ type: 'ready', protocol: 3, proxyPort, controlPort: address.port, pid: process.pid });
     process.disconnect?.();
   } catch (error) {
     process.send?.({ type: 'error', message: error instanceof Error ? error.message : String(error) });
